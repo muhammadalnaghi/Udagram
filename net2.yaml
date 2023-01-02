@@ -1,0 +1,332 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Naghi Project 2 - Network Infrastructure'
+Parameters:
+
+  Environment:
+    Description: "Environment Name" 
+    Type: String
+  Project:
+    Description: Project Name
+    Type: String
+  VPCCIDR:
+    Description: "VPC CIDR" 
+    Type: String
+    Default: 10.0.0.0/16
+  PubSub1CIDR:
+    Description: "Public Subnet 1 CIDR - AZ-1" 
+    Type: String
+    Default: 10.0.0.0/24
+  PubSub2CIDR:
+    Description: "Public Subnet 2 CIDR - AZ-2" 
+    Type: String
+    Default: 10.0.1.0/24
+  PrivSub1CIDR:
+    Description: "Private Subnet 1 CIDR - AZ-1" 
+    Type: String
+    Default: 10.0.2.0/24
+  PrivSub2CIDR:
+    Description: "Private Subnet 2 CIDR - AZ-2" 
+    Type: String
+    Default: 10.0.3.0/24
+
+Resources:
+  #create VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+
+  #create public subnets
+  PubSub1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PubSub1CIDR
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Public Subnet AZ2
+        - Key: Project
+          Value: !Ref Project
+  PubSub2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PubSub2CIDR
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Public Subnet AZ2
+        - Key: Project
+          Value: !Ref Project
+
+  #create private subnets
+  PrivSub1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivSub1CIDR
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Private Subnet AZ1
+        - Key: Project
+          Value: !Ref Project
+          
+  PrivSub2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivSub2CIDR
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Private Subnet AZ2
+        - Key: Project  
+          Value: !Ref Project
+  #create internet gateway
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${Environment}-IGW
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+  #create igw attachment
+  IGWAtt:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  #create EIP 1
+  NAT1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAtt
+    Properties:
+        Domain: vpc
+  #create EIP 2
+  NAT2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAtt
+    Properties:
+        Domain: vpc
+
+  #create NAT GW 1
+  NATGW1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NAT1EIP.AllocationId
+      SubnetId: !Ref PubSub1
+      Tags:
+        - Key: Name
+          Value: NAT GateWay1
+        - Key: Project
+          Value: !Ref Project
+#create NAT GW 2
+  NATGW2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NAT2EIP.AllocationId
+      SubnetId: !Ref PubSub2
+      Tags:
+        - Key: Name
+          Value: NAT GateWay2
+        - Key: Project
+          Value: !Ref Project
+#create public route table
+  PubRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public Route Table
+        - Key: Project
+          Value: !Ref Project
+
+  #create public route
+  PubRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PubRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+  
+  #create pubsub1 route table association
+  PubSub1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSub1
+      RouteTableId: !Ref PubRouteTable
+
+  #create pubsub2 route table association
+  PubSub2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSub2
+      RouteTableId: !Ref PubRouteTable
+  #create "PrivRouteTable1" private route table
+  PrivRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table
+        - Key: Project
+          Value: !Ref Project
+  #create private route
+  PrivRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGW1
+
+  #create "PrivRouteTable2" private route table
+  PrivRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table
+        - Key: Project
+          Value: !Ref Project
+  #create private route
+  PrivRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGW2
+
+
+  #create privsub1 route table association
+  PrivSub1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivSub1
+      RouteTableId: !Ref PrivRouteTable1
+  #create privsub2 route table association
+  PrivSub2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivSub2
+      RouteTableId: !Ref PrivRouteTable2
+
+      #create load balancer security group
+  LBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${Project}-LBSG
+      VpcId: !Ref VPC
+
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Load Balancer Security Group
+        - Key: Project  
+          Value: !Ref Project
+        
+  #create Application security group
+  NaghiP2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: SG
+      GroupDescription: Application Security Group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LBSG
+
+      
+      Tags: 
+        - Key: Name
+          Value: !Sub ${Environment}-NaghiP2SG
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+
+
+Outputs:
+
+  VPC:
+    Description: "VPC ID" 
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${Project}-VPCID
+
+  Pubsubs:
+    Description: "Public Subnets" 
+    Value: !Join [ ",", [ !Ref PubSub1, !Ref PubSub2 ] ]
+    Export:
+      Name: !Sub ${Project}-PubSubs-IDs
+
+  PubSub1CIDR:
+    Description: "Public Subnet 1 CIDR" 
+    Value: !Ref PubSub1CIDR
+    Export:
+      Name: !Sub ${Project}-PubSub1CIDR
+  
+  PubSub2CIDR:
+    Description: "Public Subnet 2 CIDR" 
+    Value: !Ref PubSub2CIDR
+    Export:
+      Name: !Sub ${Project}-PubSub2CIDR
+
+
+  PubSub1:
+    Description: "Public Subnet 1 ID" 
+    Value: !Ref PubSub1
+    Export:
+      Name: !Sub ${Project}-PubSub1ID
+
+  PubSub2:
+    Description: "Public Subnet 2 ID" 
+    Value: !Ref PubSub2
+    Export:
+      Name: !Sub ${Project}-PubSub2ID
+
+  PrivSubs:
+    Description: "Private Subnets" 
+    Value: !Join [ ",", [ !Ref PrivSub1, !Ref PrivSub2 ] ]
+    Export:
+      Name: !Sub ${Project}-PrivSubsIDs
+
+  LBSG:
+    Description: "Load Balancer Security Group" 
+    Value: !Ref LBSG
+    Export:
+      Name: !Sub ${Project}-LBSGID
+  
+  NaghiP2SG:
+    Description: "Application Security Group" 
+    Value: !Ref NaghiP2SG
+    Export:
+      Name: !Sub ${Project}-NaghiP2SGID

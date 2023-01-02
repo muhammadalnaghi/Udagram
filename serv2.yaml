@@ -1,0 +1,215 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Naghi Project 2 - Server Infrastructure'
+Parameters:
+  Environment:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Project:
+    Description: 'Naghi Project 2 - Infrastructure'
+    Type: String
+
+  InstanceID:
+      Description: 'Udagram Instance ID'
+      Type: String
+      Default: ami-061dbd1209944525c
+  InstanceType:
+      Description: 'Udagram Instance Type'
+      Type: String
+      Default: t2.micro
+  CPUUsagePercentPolicyTargetValue:
+      Description: 'CPU Usage Percent Policy Target Value'
+      Type: String
+      Default: '70'
+  ALBRequestCompleteCountTargetValue:
+      Description: 'ALB Request Count Policy Target Value'
+      Type: String
+      Default: '3'
+Resources:
+  
+  #create 'UdacityS3ReadOnlyEC2' IAM role
+  UdacityS3ReadOnlyEC2:
+    Type: AWS::IAM::Role
+    
+    Properties:
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      RoleName: UdacityS3ReadOnlyEC2
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      
+  #create instance profile 'ProfileWithRolesForApp'
+  ProfileWithRolesForApp:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref UdacityS3ReadOnlyEC2
+  
+  #create launch configuration
+  LConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref InstanceID
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+      - Fn::ImportValue: !Sub ${Project}-NaghiP2SGID
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10
+      IamInstanceProfile: !Ref ProfileWithRolesForApp
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udacity-demo-1/udacity.zip .
+          unzip -o udacity.zip
+
+  
+  #Create Load Balancer Target Group
+  LBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${Project}-LBTargetGroup
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+
+      Port: 80
+      Protocol: HTTP
+      
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${Project}-VPCID"
+
+    #create Auto Scaling Group
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref LConfig
+      MinSize: '2'
+      MaxSize: '4'
+      VPCZoneIdentifier:
+      - Fn::ImportValue: 
+          !Sub ${Project}-PrivSubsIDs
+
+      TargetGroupARNs:
+        - !Ref LBTargetGroup
+      Tags:
+        - Key: Name
+          Value: Instance
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: !Ref Project
+          PropagateAtLaunch: true
+    
+
+  #Create Load Balancer
+  LB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets: 
+      - Fn::ImportValue: !Sub ${Project}-PubSub2ID
+      - Fn::ImportValue: !Sub ${Project}-PubSub1ID
+      SecurityGroups:
+      - Fn::ImportValue: !Sub ${Project}-LBSGID
+      Tags:
+        - Key: Name
+          Value: Load Balancer
+        - Key: Project
+          Value: !Ref Project
+  
+  #Create Load Balancer Listener
+  LBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref LBTargetGroup
+        
+  #Create Load Balancer Listener Rule
+
+  LBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref LBListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref LBTargetGroup
+
+
+  WebServerCPUPolicy:
+      Type: AWS::AutoScaling::ScalingPolicy
+      Properties:
+        AdjustmentType: PercentChangeInCapacity
+        AutoScalingGroupName: !Ref ASG
+        PolicyType: TargetTrackingScaling
+        TargetTrackingConfiguration:
+          TargetValue: 70
+          PredefinedMetricSpecification:
+            PredefinedMetricType: ASGAverageCPUUtilization
+  
+  WebServerRequestCountPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref ASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Join 
+            - '/'
+            - - !GetAtt LB.LoadBalancerFullName
+              - !GetAtt LBTargetGroup.TargetGroupFullName
+        TargetValue: 3
+
+
+Outputs:
+  
+  LB:
+    Description: Load Balancer
+    Value: !Ref LB
+  
+  LBTargetGroup:
+    Description: Load Balancer Target Group
+    Value: !Ref LBTargetGroup
+  
+  WebServerCPUPolicy:
+    Description: Web Server CPU Policy
+    Value: !Ref WebServerCPUPolicy
+  
+  WebServerRequestCountPolicy:
+    Description: Web Server Request Count Policy
+    Value: !Ref WebServerRequestCountPolicy
+  
+  DNS:
+    Description: The website URL
+    Value:
+      !Sub
+        - 'http://${DNSName}'
+        - {DNSName: !GetAtt 'LB.DNSName'}
+    Export:
+      Name: !Sub "${Project}-SiteURL"

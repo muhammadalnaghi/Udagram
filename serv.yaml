@@ -1,0 +1,225 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  Environment:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+    Default: NaghiProject2
+  NaghiProject2:
+    Description: 'Naghi Project 2 - Infrastructure'
+    Type: String
+    Default: NaghiProject2
+
+  InstanceID:
+      Description: 'Udagram Instance ID'
+      Type: String
+      Default: ami-005de95e8ff495156 
+  InstanceType:
+      Description: 'Udagram Instance Type'
+      Type: String
+      Default: t3.medium
+  InstanceVolumeSize:
+      Description: 'Instance Volume Size'
+      Type: Number
+      Default: 10
+
+  CPUUsagePercentPolicyTargetValue:
+      Description: 'CPU Usage Percent Policy Target Value'
+      Type: Number
+      Default: 70
+
+Resources:
+  #create load balancer security group
+  LBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${NaghiProject2}-LBSG
+      VpcId: !Sub ${NaghiProject2}-VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Project
+          Value: !Ref NaghiProject2
+
+      
+  #create Application security group
+  NaghiP2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${NaghiProject2}-NaghiP2SG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LBSG
+        
+      Tags:
+        - Key: Name
+          Value: !Sub ${NaghiProject2}-NaghiP2SG
+        - Key: Project
+          Value: !Ref NaghiProject2
+        - Key: Environment
+          Value: !Ref NaghiProject2
+
+  IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource: '*'
+  
+  #create instance profile
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref IAMRole
+          
+ 
+  #create Load Balancer for the instances
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub ${NaghiProject2}-PublicSubnet1ID
+      - Fn::ImportValue: !Sub ${NaghiProject2}-PublicSubnet2ID
+      SecurityGroups:
+      - Fn::ImportValue: !Sub ${NaghiProject2}-LBSGID
+      Tags:
+        - Key: Name
+          Value: LoadBalancer
+ 
+  #create Load Balancer Listener
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Sub ${NaghiProject2}-TargetGroup
+      LoadBalancerArn: !Sub ${NaghiProject2}-LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  #create Listener Rule
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Sub ${NaghiProject2}-TargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - '/*'
+      ListenerArn: !Ref LoadBalancerListener
+      Priority: 1
+  
+ 
+  #create Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${NaghiProject2}-TargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Sub ${NaghiProject2}-VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${NaghiProject2}-TargetGroup
+        - Key: Project
+          Value: !Ref NaghiProject2
+        - Key: Environment
+          Value: !Ref NaghiProject2
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5 
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      
+  
+ 
+  #create Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: 1
+      MaxSize: 2
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${NaghiProject2}-AutoScalingGroup
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: !Ref NaghiProject2
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref NaghiProject2
+          PropagateAtLaunch: true
+  
+ 
+  #create Launch Configuration for the instances
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref InstanceID
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        - !Sub ${NaghiProject2}-NaghiP2SG
+      IamInstanceProfile: !Ref InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "Udacity Demo Web Server Up and Running!" > index.html
+      #create Scaling Policy
+  ScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Sub ${NaghiProject2}-AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref CPUUsagePercentPolicyTargetValue
+
+
+
+  
