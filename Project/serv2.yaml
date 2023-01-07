@@ -14,9 +14,30 @@ Parameters:
       Type: String
       Default: ami-061dbd1209944525c
   InstanceType:
-      Description: 'Udagram Instance Type'
-      Type: String
-      Default: t2.micro
+    AllowedValues:
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m1.medium
+      - m1.large
+      - m1.xlarge
+      - m2.xlarge
+      - m2.2xlarge
+      - m2.4xlarge
+      - m3.medium
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+    ConstraintDescription: t3.medium - default
+    Default: t3.medium
+    Description: WebServer EC2 instance type
+    Type: String
+
   CPUUsagePercentPolicyTargetValue:
       Description: 'CPU Usage Percent Policy Target Value'
       Type: String
